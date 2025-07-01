@@ -1,7 +1,10 @@
 """
-This module converts between AIMessage output formats for the Responses API.
+This module converts between AIMessage output formats, which are governed by the
+``output_version`` attribute on ChatOpenAI. Supported values are ``"v0"``,
+``"responses/v1"``, and ``"v1"``.
 
-ChatOpenAI v0.3 stores reasoning and tool outputs in AIMessage.additional_kwargs:
+``"v0"`` corresponds to the format as of ChatOpenAI v0.3. For the Responses API, it
+stores reasoning and tool outputs in AIMessage.additional_kwargs:
 
 .. code-block:: python
 
@@ -24,8 +27,9 @@ ChatOpenAI v0.3 stores reasoning and tool outputs in AIMessage.additional_kwargs
         id="msg_123",
     )
 
-To retain information about response item sequencing (and to accommodate multiple
-reasoning items), ChatOpenAI now stores these items in the content sequence:
+``"responses/v1"`` is only applicable to the Responses API. It retains information
+about response item sequencing and accommodates multiple reasoning items by
+representing these items in the content sequence:
 
 .. code-block:: python
 
@@ -52,14 +56,16 @@ reasoning items), ChatOpenAI now stores these items in the content sequence:
 There are other, small improvements as well-- e.g., we store message IDs on text
 content blocks, rather than on the AIMessage.id, which now stores the response ID.
 
+``"v1"`` represents LangChain's cross-provider standard format.
+
 For backwards compatibility, this module provides functions to convert between the
-old and new formats. The functions are used internally by ChatOpenAI.
+formats. The functions are used internally by ChatOpenAI.
 """  # noqa: E501
 
 import json
-from typing import Union
+from typing import Union, cast
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 _FUNCTION_CALL_IDS_MAP_KEY = "__openai_function_call_ids__"
 
@@ -248,3 +254,45 @@ def _convert_from_v03_ai_message(message: AIMessage) -> AIMessage:
         },
         deep=False,
     )
+
+
+def _convert_to_v1_from_chat_completions(message: AIMessage) -> AIMessage:
+    """Mutate a Chat Completions message to the v1 format."""
+    if isinstance(message.content, str):
+        if message.content:
+            message.content = [{"type": "text", "text": message.content}]
+        else:
+            message.content = []
+
+    for tool_call in message.tool_calls:
+        if id_ := tool_call.get("id"):
+            message.content.append({"type": "tool_call", "id": id_})
+
+    if "tool_calls" in message.additional_kwargs:
+        _ = message.additional_kwargs.pop("tool_calls")
+
+    if "token_usage" in message.response_metadata:
+        _ = message.response_metadata.pop("token_usage")
+
+    return message
+
+
+def _convert_to_v1_from_chat_completions_chunk(chunk: AIMessageChunk) -> AIMessageChunk:
+    result = _convert_to_v1_from_chat_completions(cast(AIMessage, chunk))
+    return cast(AIMessageChunk, result)
+
+
+def _convert_from_v1_to_chat_completions(message: AIMessage) -> AIMessage:
+    """Convert a v1 message to the Chat Completions format."""
+    # TODO: currently unused, will this break non-OpenAI providers?
+    if isinstance(message.content, list):
+        new_content = []
+        for block in message.content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                # Strip annotations
+                new_content.append({"type": "text", "text": block["text"]})
+            else:
+                pass
+        return message.model_copy(update={"content": new_content})
+
+    return message

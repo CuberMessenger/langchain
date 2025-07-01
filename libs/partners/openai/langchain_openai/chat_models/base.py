@@ -109,6 +109,8 @@ from langchain_openai.chat_models._client_utils import (
 from langchain_openai.chat_models._compat import (
     _convert_from_v03_ai_message,
     _convert_to_v03_ai_message,
+    _convert_to_v1_from_chat_completions,
+    _convert_to_v1_from_chat_completions_chunk,
 )
 
 if TYPE_CHECKING:
@@ -649,7 +651,7 @@ class BaseChatOpenAI(BaseChatModel):
     .. versionadded:: 0.3.9
     """
 
-    output_version: Literal["v0", "responses/v1"] = "v0"
+    output_version: str = "v0"
     """Version of AIMessage output format to use.
 
     This field is used to roll-out new output formats for chat model AIMessages
@@ -660,9 +662,9 @@ class BaseChatOpenAI(BaseChatModel):
     - ``"v0"``: AIMessage format as of langchain-openai 0.3.x.
     - ``"responses/v1"``: Formats Responses API output
       items into AIMessage content blocks.
+    - ``"v1"``: v1 of LangChain cross-provider standard.
 
-    Currently only impacts the Responses API. ``output_version="responses/v1"`` is
-    recommended.
+    ``output_version="v1"`` is recommended.
 
     .. versionadded:: 0.3.25
 
@@ -849,6 +851,10 @@ class BaseChatOpenAI(BaseChatModel):
                 message=default_chunk_class(content="", usage_metadata=usage_metadata),
                 generation_info=base_generation_info,
             )
+            if self.output_version == "v1":
+                generation_chunk.message = _convert_to_v1_from_chat_completions_chunk(
+                    cast(AIMessageChunk, generation_chunk.message)
+                )
             return generation_chunk
 
         choice = choices[0]
@@ -875,6 +881,20 @@ class BaseChatOpenAI(BaseChatModel):
 
         if usage_metadata and isinstance(message_chunk, AIMessageChunk):
             message_chunk.usage_metadata = usage_metadata
+
+        if self.output_version == "v1":
+            message_chunk = cast(AIMessageChunk, message_chunk)
+            # Convert to v1 format
+            if isinstance(message_chunk.content, str):
+                message_chunk = _convert_to_v1_from_chat_completions_chunk(
+                    message_chunk
+                )
+                if message_chunk.content:
+                    message_chunk.content[0]["index"] = 0  # type: ignore[index]
+            else:
+                message_chunk = _convert_to_v1_from_chat_completions_chunk(
+                    message_chunk
+                )
 
         generation_chunk = ChatGenerationChunk(
             message=message_chunk, generation_info=generation_info or None
@@ -1234,6 +1254,11 @@ class BaseChatOpenAI(BaseChatModel):
             if hasattr(message, "refusal"):
                 generations[0].message.additional_kwargs["refusal"] = message.refusal
 
+        if self.output_version == "v1":
+            _ = llm_output.pop("token_usage", None)
+            generations[0].message = _convert_to_v1_from_chat_completions(
+                cast(AIMessage, generations[0].message)
+            )
         return ChatResult(generations=generations, llm_output=llm_output)
 
     async def _astream(
@@ -3607,7 +3632,7 @@ def _construct_lc_result_from_responses_api(
     response: Response,
     schema: Optional[type[_BM]] = None,
     metadata: Optional[dict] = None,
-    output_version: Literal["v0", "responses/v1"] = "v0",
+    output_version: str = "v0",
 ) -> ChatResult:
     """Construct ChatResponse from OpenAI Response API response."""
     if response.error:
@@ -3759,7 +3784,7 @@ def _convert_responses_chunk_to_generation_chunk(
     schema: Optional[type[_BM]] = None,
     metadata: Optional[dict] = None,
     has_reasoning: bool = False,
-    output_version: Literal["v0", "responses/v1"] = "v0",
+    output_version: str = "v0",
 ) -> tuple[int, int, int, Optional[ChatGenerationChunk]]:
     def _advance(output_idx: int, sub_idx: Optional[int] = None) -> None:
         """Advance indexes tracked during streaming.

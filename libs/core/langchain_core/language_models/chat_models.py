@@ -317,10 +317,8 @@ class BaseChatModel(BaseLanguageModel[BaseMessage], ABC):
     This field is used to roll-out new output formats for chat model AIMessages
     in a backwards-compatible way.
 
-    All chat models currently support the default of ``"v0"``.
-
-    Type is ``str``, chat model subclasses can override with (customizable) string
-    literals.
+    All chat models currently support the default of ``"v0"``. Chat model subclasses
+    can override with (customizable) supported values.
 
     .. versionadded:: 0.3.68
     """
